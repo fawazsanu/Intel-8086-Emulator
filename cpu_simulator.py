@@ -7,11 +7,11 @@ class Microprocessor8086:
     Supports:
     - General-purpose registers: AX, BX, CX, DX
     - Segment/pointer registers: SP, BP, SI, DI
-    - Flag Register: ZF, CF, SF, OF
-    - Memory: 64KB address space (dictionary-backed, sparse)
-    - Instructions: MOV, ADD, SUB, MUL, DIV, AND, OR, XOR, NOT,
-                    CMP, JMP, JZ, JE, JNZ, JNE, JG, JL, PUSH, POP, NOP
-    - Memory syntax: MOV [1000], AX  |  MOV AX, [BX]  |  MOV [0xFF], 42
+    - Flag Register: Zero Flag (ZF), Carry Flag (CF), Sign Flag (SF), Overflow Flag (OF)
+    - Memory: 64KB address space (dictionary-backed)
+    - Instructions: MOV, ADD, SUB, MUL, DIV, AND, OR, XOR, NOT, CMP,
+                    JMP, JZ, JNZ, JE, JNE, JG, JL, PUSH, POP, NOP
+    - Program execution mode with labelled jump targets
     """
 
     REGISTERS = {'AX', 'BX', 'CX', 'DX', 'SP', 'BP', 'SI', 'DI'}
@@ -20,7 +20,7 @@ class Microprocessor8086:
 
     def __init__(self):
         self.registers = {r: 0 for r in self.REGISTERS}
-        self.memory = {}           # Sparse 64KB address space
+        self.memory = {}
         self.stack = []
         self.flags = {
             'ZF': 0,
@@ -43,14 +43,12 @@ class Microprocessor8086:
             self.flags['OF'] = 0
 
     def _resolve_address(self, token):
-        """Resolve a memory address token (register or literal)."""
         token = token.strip().upper()
         if token in self.registers:
             return self.registers[token]
         return int(token, 0)
 
     def _get_value(self, token):
-        """Resolve a token to an integer — register, memory ref, or immediate."""
         upper = token.upper()
         if upper in self.registers:
             return self.registers[upper]
@@ -60,7 +58,6 @@ class Microprocessor8086:
         return int(token, 0)
 
     def _set_destination(self, dest, value):
-        """Write a value to a register or memory address."""
         dest_upper = dest.upper()
         value = value & self.MAX_VAL
         if dest_upper in self.registers:
@@ -187,6 +184,61 @@ class Microprocessor8086:
 
         return None
 
+    # ------------------------------------------------------------------
+    # Program execution mode
+    # ------------------------------------------------------------------
+
+    def run_program(self, source):
+        """
+        Execute a multi-line assembly program.
+        Supports labels (e.g. 'LOOP:') as jump targets.
+        Detects infinite loops (> 10,000 cycles).
+        """
+        lines = [l.strip() for l in source.strip().splitlines()]
+
+        # First pass: index all labels
+        labels = {}
+        clean_lines = []
+        for line in lines:
+            stripped = line.split(';')[0].strip()
+            if not stripped:
+                continue
+            if stripped.endswith(':'):
+                labels[stripped[:-1].upper()] = len(clean_lines)
+            else:
+                clean_lines.append(stripped)
+
+        # Second pass: execute
+        ip = 0
+        cycle_count = 0
+        MAX_CYCLES = 10_000
+
+        print(f"\n  Running program ({len(clean_lines)} instructions)...\n")
+
+        while ip < len(clean_lines):
+            if cycle_count >= MAX_CYCLES:
+                print(f"  [!] HALTED: Exceeded {MAX_CYCLES} cycles. Possible infinite loop.")
+                break
+
+            instruction = clean_lines[ip]
+            jump_target = self.execute_instruction(instruction)
+            cycle_count += 1
+
+            if jump_target:
+                target = jump_target.upper()
+                if target not in labels:
+                    print(f"  [!] JUMP ERROR: Label '{target}' not defined.")
+                    break
+                ip = labels[target]
+            else:
+                ip += 1
+
+        print(f"\n  Program completed in {cycle_count} cycle(s).")
+
+    # ------------------------------------------------------------------
+    # Display
+    # ------------------------------------------------------------------
+
     def dump_registers(self):
         print("+------------------------------------------+")
         print("|         8086 REGISTER STATE              |")
@@ -226,12 +278,16 @@ class Microprocessor8086:
         print()
 
 
+# ----------------------------------------------------------------------
+# CLI Shell
+# ----------------------------------------------------------------------
+
 HELP_TEXT = """
   AVAILABLE COMMANDS
   ------------------
-  MOV  dest, src       — Move (supports memory: MOV [1000], AX)
-  ADD  dest, src       — Add, update flags
-  SUB  dest, src       — Subtract, update flags
+  MOV  dest, src       — Move value into register or memory
+  ADD  dest, src       — Add src to dest, update flags
+  SUB  dest, src       — Subtract src from dest, update flags
   MUL  src             — Multiply AX by src
   DIV  src             — Divide AX by src
   AND  dest, src       — Bitwise AND
@@ -240,29 +296,32 @@ HELP_TEXT = """
   NOT  dest            — Bitwise NOT
   CMP  a, b            — Compare (sets flags, no write)
   JMP  label           — Unconditional jump (use in RUN mode)
-  JZ/JE   label        — Jump if ZF set
-  JNZ/JNE label        — Jump if ZF clear
+  JZ/JE   label        — Jump if Zero Flag set
+  JNZ/JNE label        — Jump if Zero Flag clear
   JG   label           — Jump if greater
   JL   label           — Jump if less
-  PUSH src             — Push onto stack
-  POP  dest            — Pop from stack
+  PUSH src             — Push value onto stack
+  POP  dest            — Pop value from stack
   NOP                  — No operation
 
-  Memory syntax:  MOV [1000], AX  |  MOV AX, [BX]  |  MOV [0xFF], 42
+  Memory syntax:        MOV [1000], AX  |  MOV AX, [BX]  |  MOV [0xFF], 42
+  Hex immediates:       MOV AX, 0xFF
 
   SHELL COMMANDS
   --------------
-  FLAGS   — Show flag register
-  MEMORY  — Show non-zero memory contents
-  RESET   — Reset CPU
-  HELP    — Show this message
-  EXIT    — Quit
+  FLAGS    — Show flag register state
+  MEMORY   — Show non-zero memory contents
+  RESET    — Reset CPU to initial state
+  RUN      — Enter program mode (multi-line, type END to execute)
+  HELP     — Show this message
+  EXIT     — Quit emulator
 """
 
 def run_shell():
     cpu = Microprocessor8086()
+
     print("\n" + "=" * 50)
-    print("   INTEL 8086 EMULATOR  v1.4")
+    print("   INTEL 8086 EMULATOR  v2.0")
     print("   Type HELP for commands. EXIT to quit.")
     print("=" * 50 + "\n")
     cpu.dump_registers()
@@ -272,29 +331,66 @@ def run_shell():
             cmd = input("8086> ").strip()
             if not cmd or cmd.startswith(';'):
                 continue
+
             upper = cmd.upper()
+
             if upper == 'EXIT':
                 print("  Powering down CPU. Goodbye.")
                 break
+
             elif upper == 'RESET':
                 cpu = Microprocessor8086()
-                print("\n  [!] CPU Reset.\n")
+                print("\n  [!] CPU Reset to Initial State.\n")
                 cpu.dump_registers()
+
             elif upper == 'FLAGS':
                 cpu.dump_flags()
+
             elif upper == 'MEMORY':
                 cpu.dump_memory()
+
             elif upper == 'HELP':
                 print(HELP_TEXT)
+
+            elif upper == 'RUN':
+                print("  Program mode — enter instructions line by line.")
+                print("  Use labels ending with ':' for jump targets (e.g. LOOP:).")
+                print("  Type END on a new line to execute.\n")
+                program_lines = []
+                while True:
+                    line = input("  ... ").strip()
+                    if line.upper() == 'END':
+                        break
+                    program_lines.append(line)
+                if program_lines:
+                    cpu.run_program('\n'.join(program_lines))
+                    cpu.dump_registers()
+                    cpu.dump_flags()
+                else:
+                    print("  No instructions entered.")
+
             else:
-                result = cpu.execute_instruction(cmd)
-                if result:
-                    print(f"  [i] Jump to '{result}' would be taken (use RUN mode for programs).")
+                cpu.execute_instruction(cmd)
                 cpu.dump_registers()
                 cpu.dump_flags()
+
         except KeyboardInterrupt:
             print("\n  Powering down CPU. Goodbye.")
             break
 
+
 if __name__ == "__main__":
-    run_shell()
+    # Optional: pass a .asm file as argument to run directly
+    # Usage: python cpu_simulator.py program.asm
+    if len(sys.argv) > 1:
+        try:
+            with open(sys.argv[1], 'r') as f:
+                source = f.read()
+            cpu = Microprocessor8086()
+            cpu.run_program(source)
+            cpu.dump_registers()
+            cpu.dump_flags()
+        except FileNotFoundError:
+            print(f"  [!] File not found: {sys.argv[1]}")
+    else:
+        run_shell()
