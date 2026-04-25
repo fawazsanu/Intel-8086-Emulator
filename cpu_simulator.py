@@ -7,8 +7,13 @@ class Microprocessor8086:
     Supports:
     - General-purpose registers: AX, BX, CX, DX
     - Segment/pointer registers: SP, BP, SI, DI
-    - Flag Register: Zero Flag (ZF), Carry Flag (CF), Sign Flag (SF), Overflow Flag (OF)
-    - Instructions: MOV, ADD, SUB, MUL, DIV, AND, OR, XOR, NOT, PUSH, POP, NOP
+    - Flag Register: ZF, CF, SF, OF
+    - Instructions: MOV, ADD, SUB, MUL, DIV, AND, OR, XOR, NOT,
+                    CMP, JMP, JZ, JE, JNZ, JNE, JG, JL, PUSH, POP, NOP
+    
+    Note: Jump instructions are designed for use in program execution mode
+    (coming in a future update). In single-instruction mode, they return
+    the jump target label as a string.
     """
 
     REGISTERS = {'AX', 'BX', 'CX', 'DX', 'SP', 'BP', 'SI', 'DI'}
@@ -30,7 +35,6 @@ class Microprocessor8086:
         self.flags['ZF'] = 1 if unsigned_result == 0 else 0
         self.flags['SF'] = 1 if (unsigned_result & self.SIGN_BIT) else 0
         self.flags['CF'] = 1 if (result > self.MAX_VAL or result < 0) else 0
-
         if operand_a is not None and operand_b is not None:
             a_sign = (operand_a & self.SIGN_BIT)
             b_sign = (operand_b & self.SIGN_BIT) if operation == 'add' else (~operand_b & self.SIGN_BIT)
@@ -54,6 +58,10 @@ class Microprocessor8086:
             raise ValueError(f"Invalid destination: '{dest}'")
 
     def execute_instruction(self, instruction):
+        """
+        Parse and execute a single instruction.
+        Returns a jump target label string if a jump is taken, else None.
+        """
         instruction = instruction.split(';')[0].strip()
         if not instruction:
             return None
@@ -93,7 +101,6 @@ class Microprocessor8086:
                 self._set_destination('AX', self.registers['AX'] // src)
                 self.flags['ZF'] = 1 if self.registers['AX'] == 0 else 0
 
-            # --- Logic instructions ---
             elif opcode == 'AND':
                 a = self._get_value(parts[1])
                 b = self._get_value(parts[2])
@@ -121,6 +128,33 @@ class Microprocessor8086:
             elif opcode == 'NOT':
                 a = self._get_value(parts[1])
                 self._set_destination(parts[1], (~a) & self.MAX_VAL)
+
+            # --- Comparison ---
+            elif opcode == 'CMP':
+                a = self._get_value(parts[1])
+                b = self._get_value(parts[2])
+                result = a - b
+                self._update_flags(result, a, b, 'sub')
+
+            # --- Jump instructions ---
+            elif opcode == 'JMP':
+                return parts[1]  # unconditional
+
+            elif opcode in ('JZ', 'JE'):
+                if self.flags['ZF'] == 1:
+                    return parts[1]
+
+            elif opcode in ('JNZ', 'JNE'):
+                if self.flags['ZF'] == 0:
+                    return parts[1]
+
+            elif opcode == 'JG':
+                if self.flags['ZF'] == 0 and self.flags['SF'] == self.flags['OF']:
+                    return parts[1]
+
+            elif opcode == 'JL':
+                if self.flags['SF'] != self.flags['OF']:
+                    return parts[1]
 
             elif opcode == 'PUSH':
                 self.stack.append(self._get_value(parts[1]))
@@ -176,31 +210,39 @@ class Microprocessor8086:
 HELP_TEXT = """
   AVAILABLE COMMANDS
   ------------------
-  MOV  dest, src  — Move value into register
-  ADD  dest, src  — Add src to dest, update flags
-  SUB  dest, src  — Subtract src from dest, update flags
-  MUL  src        — Multiply AX by src
-  DIV  src        — Divide AX by src
-  AND  dest, src  — Bitwise AND
-  OR   dest, src  — Bitwise OR
-  XOR  dest, src  — Bitwise XOR
-  NOT  dest       — Bitwise NOT
-  PUSH src        — Push value onto stack
-  POP  dest       — Pop value from stack
-  NOP             — No operation
+  MOV  dest, src       — Move value into register
+  ADD  dest, src       — Add, update flags
+  SUB  dest, src       — Subtract, update flags
+  MUL  src             — Multiply AX by src
+  DIV  src             — Divide AX by src
+  AND  dest, src       — Bitwise AND
+  OR   dest, src       — Bitwise OR
+  XOR  dest, src       — Bitwise XOR
+  NOT  dest            — Bitwise NOT
+  CMP  a, b            — Compare (sets flags, no write)
+  JMP  label           — Unconditional jump
+  JZ/JE   label        — Jump if Zero Flag set
+  JNZ/JNE label        — Jump if Zero Flag clear
+  JG   label           — Jump if greater
+  JL   label           — Jump if less
+  PUSH src             — Push onto stack
+  POP  dest            — Pop from stack
+  NOP                  — No operation
+
+  Note: Jump instructions require RUN mode (coming soon).
 
   SHELL COMMANDS
   --------------
-  FLAGS  — Show flag register state
-  RESET  — Reset CPU to initial state
+  FLAGS  — Show flag register
+  RESET  — Reset CPU
   HELP   — Show this message
-  EXIT   — Quit emulator
+  EXIT   — Quit
 """
 
 def run_shell():
     cpu = Microprocessor8086()
     print("\n" + "=" * 50)
-    print("   INTEL 8086 EMULATOR  v1.2")
+    print("   INTEL 8086 EMULATOR  v1.3")
     print("   Type HELP for commands. EXIT to quit.")
     print("=" * 50 + "\n")
     cpu.dump_registers()
@@ -223,7 +265,9 @@ def run_shell():
             elif upper == 'HELP':
                 print(HELP_TEXT)
             else:
-                cpu.execute_instruction(cmd)
+                result = cpu.execute_instruction(cmd)
+                if result:
+                    print(f"  [i] Jump to '{result}' would be taken (use RUN mode for programs).")
                 cpu.dump_registers()
                 cpu.dump_flags()
         except KeyboardInterrupt:
