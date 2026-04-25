@@ -8,12 +8,10 @@ class Microprocessor8086:
     - General-purpose registers: AX, BX, CX, DX
     - Segment/pointer registers: SP, BP, SI, DI
     - Flag Register: ZF, CF, SF, OF
+    - Memory: 64KB address space (dictionary-backed, sparse)
     - Instructions: MOV, ADD, SUB, MUL, DIV, AND, OR, XOR, NOT,
                     CMP, JMP, JZ, JE, JNZ, JNE, JG, JL, PUSH, POP, NOP
-    
-    Note: Jump instructions are designed for use in program execution mode
-    (coming in a future update). In single-instruction mode, they return
-    the jump target label as a string.
+    - Memory syntax: MOV [1000], AX  |  MOV AX, [BX]  |  MOV [0xFF], 42
     """
 
     REGISTERS = {'AX', 'BX', 'CX', 'DX', 'SP', 'BP', 'SI', 'DI'}
@@ -22,6 +20,7 @@ class Microprocessor8086:
 
     def __init__(self):
         self.registers = {r: 0 for r in self.REGISTERS}
+        self.memory = {}           # Sparse 64KB address space
         self.stack = []
         self.flags = {
             'ZF': 0,
@@ -43,25 +42,36 @@ class Microprocessor8086:
         else:
             self.flags['OF'] = 0
 
+    def _resolve_address(self, token):
+        """Resolve a memory address token (register or literal)."""
+        token = token.strip().upper()
+        if token in self.registers:
+            return self.registers[token]
+        return int(token, 0)
+
     def _get_value(self, token):
+        """Resolve a token to an integer — register, memory ref, or immediate."""
         upper = token.upper()
         if upper in self.registers:
             return self.registers[upper]
+        if upper.startswith('[') and upper.endswith(']'):
+            addr = self._resolve_address(token[1:-1])
+            return self.memory.get(addr, 0)
         return int(token, 0)
 
     def _set_destination(self, dest, value):
-        dest = dest.upper()
+        """Write a value to a register or memory address."""
+        dest_upper = dest.upper()
         value = value & self.MAX_VAL
-        if dest in self.registers:
-            self.registers[dest] = value
+        if dest_upper in self.registers:
+            self.registers[dest_upper] = value
+        elif dest_upper.startswith('[') and dest_upper.endswith(']'):
+            addr = self._resolve_address(dest[1:-1])
+            self.memory[addr] = value
         else:
             raise ValueError(f"Invalid destination: '{dest}'")
 
     def execute_instruction(self, instruction):
-        """
-        Parse and execute a single instruction.
-        Returns a jump target label string if a jump is taken, else None.
-        """
         instruction = instruction.split(';')[0].strip()
         if not instruction:
             return None
@@ -129,16 +139,13 @@ class Microprocessor8086:
                 a = self._get_value(parts[1])
                 self._set_destination(parts[1], (~a) & self.MAX_VAL)
 
-            # --- Comparison ---
             elif opcode == 'CMP':
                 a = self._get_value(parts[1])
                 b = self._get_value(parts[2])
-                result = a - b
-                self._update_flags(result, a, b, 'sub')
+                self._update_flags(a - b, a, b, 'sub')
 
-            # --- Jump instructions ---
             elif opcode == 'JMP':
-                return parts[1]  # unconditional
+                return parts[1]
 
             elif opcode in ('JZ', 'JE'):
                 if self.flags['ZF'] == 1:
@@ -206,11 +213,23 @@ class Microprocessor8086:
             print(f"| {flag} | {state}  {descriptions[flag]:<28} |")
         print("+------------------------------------------+\n")
 
+    def dump_memory(self, start=0, end=16):
+        print(f"\n  Memory [{start:04X}h — {end:04X}h]:")
+        any_written = False
+        for addr in range(start, end + 1):
+            val = self.memory.get(addr, None)
+            if val is not None:
+                print(f"    [{addr:04X}h] = {val:04X}h  (Dec: {val})")
+                any_written = True
+        if not any_written:
+            print("    (empty)")
+        print()
+
 
 HELP_TEXT = """
   AVAILABLE COMMANDS
   ------------------
-  MOV  dest, src       — Move value into register
+  MOV  dest, src       — Move (supports memory: MOV [1000], AX)
   ADD  dest, src       — Add, update flags
   SUB  dest, src       — Subtract, update flags
   MUL  src             — Multiply AX by src
@@ -220,29 +239,30 @@ HELP_TEXT = """
   XOR  dest, src       — Bitwise XOR
   NOT  dest            — Bitwise NOT
   CMP  a, b            — Compare (sets flags, no write)
-  JMP  label           — Unconditional jump
-  JZ/JE   label        — Jump if Zero Flag set
-  JNZ/JNE label        — Jump if Zero Flag clear
+  JMP  label           — Unconditional jump (use in RUN mode)
+  JZ/JE   label        — Jump if ZF set
+  JNZ/JNE label        — Jump if ZF clear
   JG   label           — Jump if greater
   JL   label           — Jump if less
   PUSH src             — Push onto stack
   POP  dest            — Pop from stack
   NOP                  — No operation
 
-  Note: Jump instructions require RUN mode (coming soon).
+  Memory syntax:  MOV [1000], AX  |  MOV AX, [BX]  |  MOV [0xFF], 42
 
   SHELL COMMANDS
   --------------
-  FLAGS  — Show flag register
-  RESET  — Reset CPU
-  HELP   — Show this message
-  EXIT   — Quit
+  FLAGS   — Show flag register
+  MEMORY  — Show non-zero memory contents
+  RESET   — Reset CPU
+  HELP    — Show this message
+  EXIT    — Quit
 """
 
 def run_shell():
     cpu = Microprocessor8086()
     print("\n" + "=" * 50)
-    print("   INTEL 8086 EMULATOR  v1.3")
+    print("   INTEL 8086 EMULATOR  v1.4")
     print("   Type HELP for commands. EXIT to quit.")
     print("=" * 50 + "\n")
     cpu.dump_registers()
@@ -262,6 +282,8 @@ def run_shell():
                 cpu.dump_registers()
             elif upper == 'FLAGS':
                 cpu.dump_flags()
+            elif upper == 'MEMORY':
+                cpu.dump_memory()
             elif upper == 'HELP':
                 print(HELP_TEXT)
             else:
