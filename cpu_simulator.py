@@ -8,7 +8,7 @@ class Microprocessor8086:
     - General-purpose registers: AX, BX, CX, DX
     - Segment/pointer registers: SP, BP, SI, DI
     - Flag Register: Zero Flag (ZF), Carry Flag (CF), Sign Flag (SF), Overflow Flag (OF)
-    - Instructions: MOV, ADD, SUB, MUL, DIV, PUSH, POP, NOP
+    - Instructions: MOV, ADD, SUB, MUL, DIV, AND, OR, XOR, NOT, PUSH, POP, NOP
     """
 
     REGISTERS = {'AX', 'BX', 'CX', 'DX', 'SP', 'BP', 'SI', 'DI'}
@@ -19,18 +19,13 @@ class Microprocessor8086:
         self.registers = {r: 0 for r in self.REGISTERS}
         self.stack = []
         self.flags = {
-            'ZF': 0,  # Zero Flag  — set when result is 0
-            'CF': 0,  # Carry Flag — set on unsigned overflow/borrow
-            'SF': 0,  # Sign Flag  — set when result is negative
-            'OF': 0,  # Overflow Flag — set on signed overflow
+            'ZF': 0,
+            'CF': 0,
+            'SF': 0,
+            'OF': 0,
         }
 
-    # ------------------------------------------------------------------
-    # Flag helpers
-    # ------------------------------------------------------------------
-
     def _update_flags(self, result, operand_a=None, operand_b=None, operation='add'):
-        """Update ZF, CF, SF, OF based on a 16-bit arithmetic result."""
         unsigned_result = result & self.MAX_VAL
         self.flags['ZF'] = 1 if unsigned_result == 0 else 0
         self.flags['SF'] = 1 if (unsigned_result & self.SIGN_BIT) else 0
@@ -45,14 +40,12 @@ class Microprocessor8086:
             self.flags['OF'] = 0
 
     def _get_value(self, token):
-        """Resolve a token to an integer — register or immediate."""
         upper = token.upper()
         if upper in self.registers:
             return self.registers[upper]
         return int(token, 0)
 
     def _set_destination(self, dest, value):
-        """Write a value to a register."""
         dest = dest.upper()
         value = value & self.MAX_VAL
         if dest in self.registers:
@@ -60,12 +53,7 @@ class Microprocessor8086:
         else:
             raise ValueError(f"Invalid destination: '{dest}'")
 
-    # ------------------------------------------------------------------
-    # Instruction execution
-    # ------------------------------------------------------------------
-
     def execute_instruction(self, instruction):
-        """Parse and execute a single assembly instruction."""
         instruction = instruction.split(';')[0].strip()
         if not instruction:
             return None
@@ -75,8 +63,7 @@ class Microprocessor8086:
 
         try:
             if opcode == 'MOV':
-                val = self._get_value(parts[2])
-                self._set_destination(parts[1], val)
+                self._set_destination(parts[1], self._get_value(parts[2]))
 
             elif opcode == 'ADD':
                 a = self._get_value(parts[1])
@@ -106,6 +93,35 @@ class Microprocessor8086:
                 self._set_destination('AX', self.registers['AX'] // src)
                 self.flags['ZF'] = 1 if self.registers['AX'] == 0 else 0
 
+            # --- Logic instructions ---
+            elif opcode == 'AND':
+                a = self._get_value(parts[1])
+                b = self._get_value(parts[2])
+                result = a & b
+                self._update_flags(result)
+                self.flags['CF'] = self.flags['OF'] = 0
+                self._set_destination(parts[1], result)
+
+            elif opcode == 'OR':
+                a = self._get_value(parts[1])
+                b = self._get_value(parts[2])
+                result = a | b
+                self._update_flags(result)
+                self.flags['CF'] = self.flags['OF'] = 0
+                self._set_destination(parts[1], result)
+
+            elif opcode == 'XOR':
+                a = self._get_value(parts[1])
+                b = self._get_value(parts[2])
+                result = a ^ b
+                self._update_flags(result)
+                self.flags['CF'] = self.flags['OF'] = 0
+                self._set_destination(parts[1], result)
+
+            elif opcode == 'NOT':
+                a = self._get_value(parts[1])
+                self._set_destination(parts[1], (~a) & self.MAX_VAL)
+
             elif opcode == 'PUSH':
                 self.stack.append(self._get_value(parts[1]))
 
@@ -130,12 +146,7 @@ class Microprocessor8086:
 
         return None
 
-    # ------------------------------------------------------------------
-    # Display
-    # ------------------------------------------------------------------
-
     def dump_registers(self):
-        """Print current register state."""
         print("+------------------------------------------+")
         print("|         8086 REGISTER STATE              |")
         print("+--------+---------+-----------------------+")
@@ -147,7 +158,6 @@ class Microprocessor8086:
         print("+------------------------------------------+")
 
     def dump_flags(self):
-        """Print current flag register state."""
         print("+------------------------------------------+")
         print("|            FLAG REGISTER                 |")
         print("+--------+---------------------------------+")
@@ -163,10 +173,6 @@ class Microprocessor8086:
         print("+------------------------------------------+\n")
 
 
-# ----------------------------------------------------------------------
-# CLI Shell
-# ----------------------------------------------------------------------
-
 HELP_TEXT = """
   AVAILABLE COMMANDS
   ------------------
@@ -175,6 +181,10 @@ HELP_TEXT = """
   SUB  dest, src  — Subtract src from dest, update flags
   MUL  src        — Multiply AX by src
   DIV  src        — Divide AX by src
+  AND  dest, src  — Bitwise AND
+  OR   dest, src  — Bitwise OR
+  XOR  dest, src  — Bitwise XOR
+  NOT  dest       — Bitwise NOT
   PUSH src        — Push value onto stack
   POP  dest       — Pop value from stack
   NOP             — No operation
@@ -189,9 +199,8 @@ HELP_TEXT = """
 
 def run_shell():
     cpu = Microprocessor8086()
-
     print("\n" + "=" * 50)
-    print("   INTEL 8086 EMULATOR  v1.1")
+    print("   INTEL 8086 EMULATOR  v1.2")
     print("   Type HELP for commands. EXIT to quit.")
     print("=" * 50 + "\n")
     cpu.dump_registers()
@@ -201,9 +210,7 @@ def run_shell():
             cmd = input("8086> ").strip()
             if not cmd or cmd.startswith(';'):
                 continue
-
             upper = cmd.upper()
-
             if upper == 'EXIT':
                 print("  Powering down CPU. Goodbye.")
                 break
@@ -219,11 +226,9 @@ def run_shell():
                 cpu.execute_instruction(cmd)
                 cpu.dump_registers()
                 cpu.dump_flags()
-
         except KeyboardInterrupt:
             print("\n  Powering down CPU. Goodbye.")
             break
-
 
 if __name__ == "__main__":
     run_shell()
